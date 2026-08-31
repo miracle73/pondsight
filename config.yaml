@@ -1,0 +1,31 @@
+paths:
+  video: "data/sample.mp4"
+  output_dir: "outputs"
+  model_weights: "runs/detect/train/weights/best.pt"
+  gt_csv: null
+
+model:
+  name: "yolo11n.pt"
+  conf: 0.35
+  iou: 0.45
+  imgsz: 640
+
+tracking:
+  tracker: "bytetrack.yaml"
+  persist: true
+
+scale:
+  px_per_cm: 12.5
+
+allometric:
+  a: 0.0089
+  b: 3.05
+
+activity:
+  flow_scale: 0.5
+  smooth_window: 15
+
+training:
+  epochs: 10
+  batch: 8
+  dataset_slug: null
