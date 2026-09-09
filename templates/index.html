@@ -36,6 +36,7 @@
     <div class="card">
         <div class="drop" id="drop">
             <p><strong>Click or drop an underwater fish video here</strong></p>
+            <p>Maximum: 50 MB and 30 seconds per video.</p>
             <p id="fileinfo" style="color:#9fb6d4;">No file selected</p>
             <input type="file" id="file" accept="video/*" style="display:none;">
         </div>
@@ -74,6 +75,9 @@ const fileInput = document.getElementById('file');
 const fileinfo = document.getElementById('fileinfo');
 const runBtn = document.getElementById('run');
 let selectedFile = null;
+let fileValid = false;
+const maxVideoBytes = {{ max_video_bytes | tojson }};
+const maxVideoSeconds = {{ max_video_seconds | tojson }};
 
 drop.onclick = () => fileInput.click();
 drop.ondragover = (e) => { e.preventDefault(); drop.classList.add('hover'); };
@@ -83,36 +87,82 @@ drop.ondrop = (e) => { e.preventDefault(); drop.classList.remove('hover');
 fileInput.onchange = () => { selectedFile = fileInput.files[0]; updateFile(); };
 
 function updateFile() {
-    if (selectedFile) {
-        fileinfo.textContent = selectedFile.name + ' (' + (selectedFile.size/1048576).toFixed(1) + ' MB)';
-        runBtn.disabled = false;
+    fileValid = false;
+    runBtn.disabled = true;
+    const file = selectedFile;
+    if (!file) { fileinfo.textContent = 'No file selected'; return; }
+    fileinfo.textContent = file.name + ' (' + (file.size/1048576).toFixed(1) + ' MB)';
+    if (file.size > maxVideoBytes) {
+        setStatus('Video exceeds the 50 MB size limit.', 0);
+        return;
     }
+    setStatus('Checking video duration...', 0);
+    const video = document.createElement('video');
+    const url = URL.createObjectURL(file);
+    video.preload = 'metadata';
+    video.onloadedmetadata = () => {
+        URL.revokeObjectURL(url);
+        if (selectedFile !== file) return;
+        fileValid = Number.isFinite(video.duration) && video.duration > 0 && video.duration <= maxVideoSeconds;
+        setStatus(fileValid ? 'Ready to analyze.' : 'Video must be readable and no longer than 30 seconds.', 0);
+        runBtn.disabled = analyzing || !fileValid;
+    };
+    video.onerror = () => {
+        URL.revokeObjectURL(url);
+        if (selectedFile !== file) return;
+        // The server can validate formats this browser cannot preview.
+        fileValid = true;
+        setStatus('Duration will be checked by the server before analysis.', 0);
+        runBtn.disabled = analyzing;
+    };
+    video.src = url;
 }
 
 let jobId = null;
-runBtn.onclick = () => {
+let analyzing = false;
+runBtn.onclick = async () => {
+    if (analyzing || !fileValid) return;
+    analyzing = true;
+    runBtn.disabled = true;
+    document.getElementById('outputs').style.display = 'none';
     const fd = new FormData();
     fd.append('video', selectedFile);
-    setStatus('Uploading...', 5);
-    fetch('/api/upload', { method: 'POST', body: fd })
-        .then(r => r.json())
-        .then(data => {
-            if (data.error) { setStatus('Error: ' + data.error, 0); return; }
-            jobId = data.job_id;
-            poll();
-        });
+    setStatus('Uploading...', 0);
+    try {
+        const response = await fetch('/api/upload', { method: 'POST', body: fd });
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error || 'Upload failed (' + response.status + ').');
+        if (data.error) throw new Error(data.error);
+        jobId = data.job_id;
+        poll();
+    } catch (error) {
+        setStatus(error.message, 0);
+        finish();
+    }
 };
 
-function poll() {
-    fetch('/api/status/' + jobId)
-        .then(r => r.json())
-        .then(s => {
-            const pctDone = ['done','error'].includes(s.status) ;
-            setStatus(s.status + ' - ' + s.log, pctDone ? 100 : 60);
-            if (s.status === 'done') { showOutputs(); return; }
-            if (s.status === 'error') { setStatus('Error: ' + s.log, 100); return; }
-            setTimeout(poll, 1500);
-        });
+function finish() {
+    analyzing = false;
+    runBtn.disabled = !fileValid;
+}
+
+async function poll() {
+    try {
+        const response = await fetch('/api/status/' + jobId);
+        if (response.status === 404) {
+            setStatus('Analysis job was lost after a server restart. Please analyze again.', 0);
+            finish();
+            return;
+        }
+        if (!response.ok) throw new Error('Status unavailable');
+        const s = await response.json();
+        setStatus(s.log, s.progress || 0);
+        if (s.status === 'done') { finish(); showOutputs(); return; }
+        if (s.status === 'error') { finish(); return; }
+    } catch (error) {
+        document.getElementById('status').textContent = 'Connection interrupted. Retrying...';
+    }
+    setTimeout(poll, 1500);
 }
 
 function setStatus(text, pct) {

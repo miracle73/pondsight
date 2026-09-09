@@ -1,7 +1,8 @@
 from pathlib import Path
 import shutil
 import uuid
-import time
+import math
+import cv2
 import threading
 
 from flask import Flask, request, jsonify, render_template, send_from_directory
@@ -15,7 +16,10 @@ UPLOAD_DIR.mkdir(exist_ok=True)
 RUNS_DIR.mkdir(exist_ok=True)
 
 app = Flask(__name__)
-app.config["MAX_CONTENT_LENGTH"] = 200 * 1024 * 1024  # 200MB
+app.config["MAX_VIDEO_BYTES"] = 50 * 1024 * 1024
+app.config["MAX_VIDEO_SECONDS"] = 30
+# Allow multipart headers in addition to the file size limit.
+app.config["MAX_CONTENT_LENGTH"] = app.config["MAX_VIDEO_BYTES"] + 1024 * 1024
 
 jobs = {}  # job_id -> status dict
 
@@ -26,17 +30,27 @@ def worker(job_id, video_path, cfg_path):
         jobs[job_id]["log"] = "Pipeline started..."
         cfg = load_config(str(cfg_path))
         cfg["paths"]["output_dir"] = str(Path(cfg_path).parent / "outputs")
-        run_pipeline(cfg, str(video_path), skip_train=True)
+        def progress(message, percent):
+            jobs[job_id].update(log=message, progress=percent)
+        run_pipeline(cfg, str(video_path), skip_train=True, progress=progress)
+        jobs[job_id]["progress"] = 100
         jobs[job_id]["status"] = "done"
         jobs[job_id]["log"] = "Finished."
     except Exception as e:
+        app.logger.exception("Analysis failed for job %s", job_id)
         jobs[job_id]["status"] = "error"
         jobs[job_id]["log"] = f"Error: {e}"
 
 
 @app.route("/")
 def index():
-    return render_template("index.html")
+    return render_template("index.html", max_video_bytes=app.config["MAX_VIDEO_BYTES"],
+                           max_video_seconds=app.config["MAX_VIDEO_SECONDS"])
+
+
+@app.errorhandler(413)
+def upload_too_large(error):
+    return jsonify({"error": "Video exceeds the 50 MB size limit."}), 413
 
 
 @app.route("/api/upload", methods=["POST"])
@@ -54,11 +68,32 @@ def upload():
     video_path = run_dir / "input.mp4"
     f.save(str(video_path))
 
+    error = None
+    code = 400
+    if video_path.stat().st_size > app.config["MAX_VIDEO_BYTES"]:
+        error, code = "Video exceeds the 50 MB size limit.", 413
+    else:
+        cap = cv2.VideoCapture(str(video_path))
+        try:
+            fps = cap.get(cv2.CAP_PROP_FPS)
+            frames = cap.get(cv2.CAP_PROP_FRAME_COUNT)
+            if not cap.isOpened() or not math.isfinite(fps) or fps <= 0 or not math.isfinite(frames) or frames <= 0:
+                error = "Cannot read video duration. Please upload a valid video."
+            elif frames / fps > app.config["MAX_VIDEO_SECONDS"]:
+                error = "Video exceeds the 30-second duration limit. Please trim it."
+        finally:
+            cap.release()
+    if error:
+        video_path.unlink()
+        run_dir.rmdir()
+        return jsonify({"error": error}), code
+
     cfg_path = run_dir / "config.yaml"
     shutil.copy(APP_DIR / "config.yaml", cfg_path)
 
     jobs[job_id] = {
         "status": "queued",
+        "progress": 0,
         "log": "Queued.",
         "dir": str(run_dir),
         "outputs": [],
@@ -82,6 +117,7 @@ def status(job_id):
     return jsonify({
         "status": j["status"],
         "log": j["log"],
+        "progress": j.get("progress", 0),
         "outputs": outputs,
     })
 

@@ -21,7 +21,9 @@ def load_config(path: str) -> dict:
         return yaml.safe_load(f)
 
 
-def run(cfg: dict, video_path: str, skip_train: bool):
+def run(cfg: dict, video_path: str, skip_train: bool, progress=None):
+    progress = progress or (lambda message, percent: None)
+    progress("Loading detection model...", 2)
     out_dir = Path(cfg["paths"]["output_dir"])
     out_dir.mkdir(parents=True, exist_ok=True)
 
@@ -64,79 +66,95 @@ def run(cfg: dict, video_path: str, skip_train: bool):
     # Video
     cap = cv2.VideoCapture(video_path)
     if not cap.isOpened():
-        print(f"Cannot open video: {video_path}")
-        return
+        cap.release()
+        raise ValueError("Cannot open video. Please upload a readable video file.")
     fps_vid = cap.get(cv2.CAP_PROP_FPS) or 30.0
     w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
     h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
     fourcc = cv2.VideoWriter_fourcc(*"mp4v")
     writer = cv2.VideoWriter(str(out_dir / "annotated.mp4"), fourcc, fps_vid, (w, h))
 
+    if not writer.isOpened():
+        cap.release()
+        writer.release()
+        raise RuntimeError("Cannot create the output video.")
+    total_expected = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    progress("Analyzing video...", 5)
+
     rows = []
     frame_idx = 0
     t_start = time.time()
 
-    while True:
-        ret, frame = cap.read()
-        if not ret:
-            break
+    try:
+        while True:
+            ret, frame = cap.read()
+            if not ret:
+                break
 
-        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
 
-        # Detect + Track
-        results = model.track(
-            frame,
-            conf=cfg["model"]["conf"],
-            iou=cfg["model"]["iou"],
-            imgsz=cfg["model"]["imgsz"],
-            tracker=cfg["paths"].get("tracker", "bytetrack.yaml"),
-            persist=cfg["tracking"]["persist"],
-            verbose=False,
-        )
-        r = results[0]
-        tracker.update(r)
+            # Detect + Track
+            results = model.track(
+                frame,
+                conf=cfg["model"]["conf"],
+                iou=cfg["model"]["iou"],
+                imgsz=cfg["model"]["imgsz"],
+                tracker=cfg["paths"].get("tracker", "bytetrack.yaml"),
+                persist=cfg["tracking"]["persist"],
+                verbose=False,
+            )
+            r = results[0]
+            tracker.update(r)
 
-        active = [tracker.tracks[tid] for tid in tracker.active_ids if len(tracker.tracks[tid].lengths_px) > 0]
-        biomass = estimator.frame_biomass(active)
+            active = [tracker.tracks[tid] for tid in tracker.active_ids if len(tracker.tracks[tid].lengths_px) > 0]
+            biomass = estimator.frame_biomass(active)
 
-        # Boxes for flow
-        boxes_for_flow = []
-        if r.boxes is not None and r.boxes.xyxy is not None:
-            boxes_for_flow = r.boxes.xyxy.cpu().numpy()
+            # Boxes for flow
+            boxes_for_flow = []
+            if r.boxes is not None and r.boxes.xyxy is not None:
+                boxes_for_flow = r.boxes.xyxy.cpu().numpy()
 
-        feed_score = activity.update(gray, boxes_for_flow)
-        fish_count = len(active)
+            feed_score = activity.update(gray, boxes_for_flow)
+            fish_count = len(active)
 
-        # Draw
-        if r.boxes is not None and r.boxes.xyxy is not None:
-            xyxy = r.boxes.xyxy.cpu().numpy()
-            ids = r.boxes.id.cpu().numpy().astype(int) if r.boxes.id is not None else [0] * len(xyxy)
-            for box, tid in zip(xyxy, ids):
-                x1, y1, x2, y2 = map(int, box)
-                cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
-                lbl = f"ID{tid}"
-                if tid in tracker.tracks:
-                    t = tracker.tracks[tid]
-                    cm = estimator.length_cm(t.mean_length_px)
-                    kg = estimator.per_track_kg(t)
-                    lbl += f" {cm:.0f}cm {kg:.2f}kg"
-                cv2.putText(frame, lbl, (x1, y1 - 8), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
+            # Draw
+            if r.boxes is not None and r.boxes.xyxy is not None:
+                xyxy = r.boxes.xyxy.cpu().numpy()
+                ids = r.boxes.id.cpu().numpy().astype(int) if r.boxes.id is not None else [0] * len(xyxy)
+                for box, tid in zip(xyxy, ids):
+                    x1, y1, x2, y2 = map(int, box)
+                    cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
+                    lbl = f"ID{tid}"
+                    if tid in tracker.tracks:
+                        t = tracker.tracks[tid]
+                        cm = estimator.length_cm(t.mean_length_px)
+                        kg = estimator.per_track_kg(t)
+                        lbl += f" {cm:.0f}cm {kg:.2f}kg"
+                    cv2.putText(frame, lbl, (x1, y1 - 8), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
 
-        # HUD
-        cv2.putText(frame, f"Biomass: {biomass:.2f} kg", (10, 30),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255), 2)
-        cv2.putText(frame, f"Feeding: {feed_score:.2f}", (10, 60),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 200, 0), 2)
-        cv2.putText(frame, f"Fish: {fish_count}", (10, 90),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
+            # HUD
+            cv2.putText(frame, f"Biomass: {biomass:.2f} kg", (10, 30),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255), 2)
+            cv2.putText(frame, f"Feeding: {feed_score:.2f}", (10, 60),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 200, 0), 2)
+            cv2.putText(frame, f"Fish: {fish_count}", (10, 90),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
 
-        writer.write(frame)
-        rows.append([frame_idx, fish_count, round(biomass, 4), round(feed_score, 4)])
-        frame_idx += 1
+            writer.write(frame)
+            rows.append([frame_idx, fish_count, round(biomass, 4), round(feed_score, 4)])
+            frame_idx += 1
+            if frame_idx == 1 or frame_idx % 10 == 0:
+                progress(f"Analyzed {frame_idx} / {total_expected or '?'} frames",
+                         min(95, 5 + 90 * frame_idx / max(total_expected, frame_idx)))
+
+    finally:
+        cap.release()
+        writer.release()
 
     elapsed = time.time() - t_start
-    cap.release()
-    writer.release()
+    if frame_idx == 0:
+        raise ValueError("The video contains no readable frames.")
+    progress("Saving results...", 97)
 
     total_frames = frame_idx
     runtime_fps = total_frames / elapsed if elapsed > 0 else 0
