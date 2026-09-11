@@ -12,7 +12,7 @@ class Track:
 
     @property
     def mean_length_px(self) -> float:
-        return float(np.mean(self.lengths_px)) if self.lengths_px else 0.0
+        return self.lengths_px[-1] if self.lengths_px else 0.0
 
     def add(self, box, length_px: float):
         self.boxes.append(box)
@@ -23,9 +23,11 @@ class Tracker:
     def __init__(self, smooth_window: int = 9):
         self.tracks: Dict[int, Track] = {}
         self.smooth_window = smooth_window
+        self._active_ids = []
         self._raw_lengths: Dict[int, List[float]] = defaultdict(list)
 
     def update(self, results) -> Dict[int, Track]:
+        self._active_ids = []
         if results is None or not hasattr(results, "boxes") or results.boxes is None:
             return self.tracks
         boxes = results.boxes
@@ -33,6 +35,7 @@ class Tracker:
             return self.tracks
         ids = boxes.id.cpu().numpy().astype(int)
         xyxy = boxes.xyxy.cpu().numpy()
+        self._active_ids = [int(tid) for tid in ids]
         for tid, box in zip(ids, xyxy):
             diag = float(np.sqrt((box[2] - box[0]) ** 2 + (box[3] - box[1]) ** 2))
             self._raw_lengths[tid].append(diag)
@@ -44,10 +47,11 @@ class Tracker:
 
     @property
     def active_ids(self) -> list:
-        return list(self.tracks.keys())
+        return list(self._active_ids)
 
-    def total_id_switches(self) -> int:
-        return max(0, len(self.tracks) - 1) if self.tracks else 0
+    def total_id_switches(self):
+        # Requires matched ground-truth identities; unique IDs are not switches.
+        return None
 
     def mean_track_length(self) -> float:
         if not self.tracks:

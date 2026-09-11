@@ -17,7 +17,7 @@ RUNS_DIR.mkdir(exist_ok=True)
 
 app = Flask(__name__)
 app.config["MAX_VIDEO_BYTES"] = 50 * 1024 * 1024
-app.config["MAX_VIDEO_SECONDS"] = 30
+app.config["MAX_VIDEO_SECONDS"] = 180
 # Allow multipart headers in addition to the file size limit.
 app.config["MAX_CONTENT_LENGTH"] = app.config["MAX_VIDEO_BYTES"] + 1024 * 1024
 
@@ -80,7 +80,7 @@ def upload():
             if not cap.isOpened() or not math.isfinite(fps) or fps <= 0 or not math.isfinite(frames) or frames <= 0:
                 error = "Cannot read video duration. Please upload a valid video."
             elif frames / fps > app.config["MAX_VIDEO_SECONDS"]:
-                error = "Video exceeds the 30-second duration limit. Please trim it."
+                error = "Video exceeds the 3-minute duration limit. Please trim it."
         finally:
             cap.release()
     if error:

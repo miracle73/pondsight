@@ -6,6 +6,7 @@ paths:
 
 model:
   name: "yolo11n.pt"
+  fish_classes: ["fish"]  # Match fish/species labels in your trained model.
   conf: 0.35
   iou: 0.45
   imgsz: 640

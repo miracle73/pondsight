@@ -24,9 +24,11 @@ def write_metrics(
     ap50_95_str = "N/A" if ap50_95 is None else f"{ap50_95:.4f}"
     lines = [
         "# Detection & Tracking Metrics",
+        "- Biomass is approximate: bounding-box size, camera scale and species constants require calibration.",
+        "- Movement score does not establish feeding behaviour.",
         f"- mAP50: {ap50_str}",
         f"- mAP50-95: {ap50_95_str}",
-        f"- Total ID switches: {id_switches}",
+        f"- Total ID switches: {id_switches if id_switches is not None else 'N/A (requires ground-truth identities)'}",
         f"- Mean track length (frames): {mean_track_len:.1f}",
         f"- Runtime FPS: {fps:.1f}",
     ]

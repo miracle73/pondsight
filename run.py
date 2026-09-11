@@ -9,7 +9,7 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
-from src.detect import get_model, train_model, validate
+from src.detect import get_model, train_model, validate, fish_class_ids
 from src.track import Tracker
 from src.biomass import BiomassEstimator
 from src.activity import FeedingActivity
@@ -42,6 +42,7 @@ def run(cfg: dict, video_path: str, skip_train: bool, progress=None):
                 data_yaml = None
 
     model = get_model(cfg)
+    fish_ids = fish_class_ids(model, cfg)
 
     # Validate
     print("Running validation...")
@@ -99,11 +100,14 @@ def run(cfg: dict, video_path: str, skip_train: bool, progress=None):
                 conf=cfg["model"]["conf"],
                 iou=cfg["model"]["iou"],
                 imgsz=cfg["model"]["imgsz"],
-                tracker=cfg["paths"].get("tracker", "bytetrack.yaml"),
+                tracker=cfg["tracking"].get("tracker", "bytetrack.yaml"),
+                classes=fish_ids,
                 persist=cfg["tracking"]["persist"],
                 verbose=False,
             )
             r = results[0]
+            if r.boxes is not None:
+                r = r[np.isin(r.boxes.cls.cpu().numpy().astype(int), fish_ids)]
             tracker.update(r)
 
             active = [tracker.tracks[tid] for tid in tracker.active_ids if len(tracker.tracks[tid].lengths_px) > 0]
@@ -133,9 +137,9 @@ def run(cfg: dict, video_path: str, skip_train: bool, progress=None):
                     cv2.putText(frame, lbl, (x1, y1 - 8), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
 
             # HUD
-            cv2.putText(frame, f"Biomass: {biomass:.2f} kg", (10, 30),
+            cv2.putText(frame, f"Approx. biomass: {biomass:.2f} kg", (10, 30),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255), 2)
-            cv2.putText(frame, f"Feeding: {feed_score:.2f}", (10, 60),
+            cv2.putText(frame, f"Movement: {feed_score:.2f}", (10, 60),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 200, 0), 2)
             cv2.putText(frame, f"Fish: {fish_count}", (10, 90),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
@@ -181,12 +185,12 @@ def plot_timeseries(csv_path: str, out: str):
     fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(10, 6), sharex=True)
     ax1.plot(df["frame"], df["biomass_kg"], color="tab:red")
     ax1.set_ylabel("Biomass (kg)")
-    ax1.set_title("Per-Frame Biomass")
+    ax1.set_title("Approximate visible biomass (calibration required)")
     ax1.grid(True, alpha=0.3)
     ax2.plot(df["frame"], df["feeding_score"], color="tab:blue")
-    ax2.set_ylabel("Feeding Score")
+    ax2.set_ylabel("Movement Score")
     ax2.set_xlabel("Frame")
-    ax2.set_title("Feeding Activity")
+    ax2.set_title("Relative movement (not verified feeding)")
     ax2.grid(True, alpha=0.3)
     plt.tight_layout()
     plt.savefig(out, dpi=150)

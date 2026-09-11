@@ -36,7 +36,7 @@
     <div class="card">
         <div class="drop" id="drop">
             <p><strong>Click or drop an underwater fish video here</strong></p>
-            <p>Maximum: 50 MB and 30 seconds per video.</p>
+            <p>Maximum: 50 MB and 3 minutes per video.</p>
             <p id="fileinfo" style="color:#9fb6d4;">No file selected</p>
             <input type="file" id="file" accept="video/*" style="display:none;">
         </div>
@@ -104,7 +104,7 @@ function updateFile() {
         URL.revokeObjectURL(url);
         if (selectedFile !== file) return;
         fileValid = Number.isFinite(video.duration) && video.duration > 0 && video.duration <= maxVideoSeconds;
-        setStatus(fileValid ? 'Ready to analyze.' : 'Video must be readable and no longer than 30 seconds.', 0);
+        setStatus(fileValid ? 'Ready to analyze.' : 'Video must be readable and no longer than 3 minutes.', 0);
         runBtn.disabled = analyzing || !fileValid;
     };
     video.onerror = () => {

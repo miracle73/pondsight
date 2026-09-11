@@ -39,11 +39,28 @@ def train_model(cfg: dict) -> str:
     return str(Path("runs/detect/train/weights/best.pt"))
 
 
+def fish_class_ids(model, cfg):
+    """Only explicitly named fish classes may contribute to fish estimates."""
+    labels = {str(name).strip().casefold() for name in cfg["model"].get("fish_classes", ["fish"])}
+    names = model.names
+    items = names.items() if isinstance(names, dict) else enumerate(names)
+    ids = [int(i) for i, name in items if str(name).strip().casefold() in labels]
+    if not ids:
+        raise ValueError(
+            "Fish detection is unavailable: this model has no configured fish classes. "
+            "Install fish-trained weights at paths.model_weights and set model.fish_classes "
+            "to their fish/species labels in config.yaml. General object detections cannot estimate fish."
+        )
+    return ids
+
+
 def get_model(cfg: dict) -> YOLO:
-    weights = cfg["paths"]["model_weights"]
-    if Path(weights).exists():
-        return YOLO(weights)
-    return YOLO(cfg["model"]["name"])
+    weights = Path(cfg["paths"]["model_weights"])
+    if not weights.is_absolute():
+        weights = Path(__file__).resolve().parents[1] / weights
+    model = YOLO(str(weights)) if weights.exists() else YOLO(cfg["model"]["name"])
+    fish_class_ids(model, cfg)
+    return model
 
 
 def validate(model: YOLO, data_yaml: str = None) -> dict:
